@@ -1,0 +1,6 @@
+ARCHIVE KEY FORMAT: {NUMBER}_{WORD}
+
+The second part of the key was chosen from a wordlist which was a part of a famous password cracking tool from back in 1991.
+The person who encrypted the archive really likes celestial bodies.
+If the wordlist seems strange, you still have something to do.
+You know you're on the right track if you find A.M.

@@ -1,0 +1,111 @@
+MERIDIAN OPERATIONS -- INTERNAL DOCUMENTATION
+TEL ROUTING TIMESTAMP ISSUE
+Last updated: 1999-12-01
+Author: meridian-ops / felix
+
+READ THIS BEFORE TOUCHING ANY TEL-* NODE.
+-------------------------------------------
+
+THE PROBLEM
+-----------
+
+The routing tables on TEL-03 through TEL-05 (and some WEST-TEL nodes)
+store packet timestamps in a proprietary 32-bit format that encodes the
+year as a 7-bit field offset from 1970.
+
+Maximum representable year in this format: 1970 + 127 = 2097. Fine.
+
+The PROBLEM is not the field size. The problem is the comparison logic
+in the routing daemon (routerd, version 2.1.4 -- the version running on
+all affected nodes). When routerd compares two timestamps to determine
+packet ordering, it masks out the year field and compares only MMDDHHMMSS.
+
+This means:
+  - A packet timestamped 1999-12-31 23:59:59 has comparison value: 1231235959
+  - A packet timestamped 2000-01-01 00:00:01 has comparison value: 0101000001
+
+The second value (year 2000) is NUMERICALLY SMALLER than the first (year 1999).
+routerd will treat any packet from year 2000 as OLDER than any packet from 1999.
+
+Result: at rollover, routerd begins discarding all incoming packets from
+year 2000 as "out of order" duplicates. Routing table coherence collapses.
+40-60% packet loss on affected backbone segments within seconds of midnight.
+
+This is not fixable with a simple patch to routerd without a full relink.
+The comparison function is inlined throughout the routing core.
+
+AFFECTED NODES
+--------------
+  EAST-TEL-03  -- patch available, see below
+  EAST-TEL-04  -- patch available, see below
+  EAST-TEL-05  -- NO PATCH AVAILABLE IN TIME (see notes)
+  WEST-TEL-01  -- clean (running routerd 2.1.6, comparison logic fixed)
+  WEST-TEL-02  -- clean
+  WEST-TEL-03  -- affected, patch pending
+
+PATCH PROCEDURE FOR TEL-03 AND TEL-04
+--------------------------------------
+The patch replaces the timestamp comparison function with a version that
+compares the full 32-bit timestamp including the year field.
+
+1. Verify the node is running routerd 2.1.4:
+     rsh EAST-TEL-03 "routerd --version"
+   Should output: "routerd version 2.1.4 (c) 1996 Meridian Network Systems"
+
+2. Stop routerd gracefully (30-second drain window):
+     rsh EAST-TEL-03 "routerd --stop --drain=30"
+
+3. Copy and apply the binary patch:
+     rcp /home/shared/millennium_ctrl/patches/routerd_214_cmp.patch \
+         EAST-TEL-03:/tmp/
+     rsh EAST-TEL-03 "patch -b /usr/sbin/routerd < /tmp/routerd_214_cmp.patch"
+
+4. Restart routerd:
+     rsh EAST-TEL-03 "routerd --start"
+
+5. Verify routing table recovery (wait 60 seconds):
+     rsh EAST-TEL-03 "routerd --status"
+
+Total time per node: approximately 8-10 minutes if nothing goes wrong.
+Do TEL-03 first. Verify. Then TEL-04.
+
+DO NOT ATTEMPT TO PATCH TEL-05 WITH THIS PROCEDURE.
+----------------------------------------------------
+TEL-05 is running a modified version of routerd 2.1.4 with custom
+extensions for the northern grid multicast routing. The binary patch
+does not apply cleanly. Attempting it will corrupt the routing binary
+and take the node offline immediately.
+
+Options for TEL-05:
+  a) Isolate from backbone before midnight (recommended by cole).
+     This takes down the northern grid secondary path but prevents
+     the cascade from spreading.
+  b) Full routerd recompile with the fixed comparison function.
+     Estimated time: 4+ hours. We do not have 4 hours.
+  c) Hope it holds. It won't.
+
+We are going with option (a). Felix is handling it.
+
+WHAT HAPPENS IF WE DON'T PATCH
+-------------------------------
+On an unpatched node:
+  - T+0s:   rollover occurs
+  - T+1s:   first year-2000 packets arrive
+  - T+2s:   routerd begins discarding them as duplicates
+  - T+10s:  routing table starts diverging from neighbors
+  - T+30s:  routing table coherence lost with upstream nodes
+  - T+60s:  node effectively partitioned from backbone
+
+The northern backbone runs through TEL-05. If TEL-05 partitions,
+any node that routes through it loses backbone connectivity.
+Grid sectors 7 through 12 go dark.
+
+NOTES
+-----
+This issue was identified on 1999-09-28 by felix during routine
+load testing. It was escalated to the full team on 1999-10-04.
+A fix request was submitted to Meridian Network Systems on 1999-10-11.
+Their response (received 1999-11-30) was that a patch would be available
+in Q1 2000. 
+
+We filed that response under "not helpful."
